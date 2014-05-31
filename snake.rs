@@ -12,11 +12,11 @@ struct Position {
 }
 
 impl Position {
-    fn up(&mut self)    { self.y-=1; }
-    fn down(&mut self)  { self.y+=1; }
-    fn left(&mut self)  { self.x-=1; }
-    fn right(&mut self) { self.x+=1; }
-    fn go(&mut self, direction: Direction) {
+    fn up (&mut self)    { self.y-=1; }
+    fn down (&mut self)  { self.y+=1; }
+    fn left (&mut self)  { self.x-=1; }
+    fn right (&mut self) { self.x+=1; }
+    fn move (&mut self, direction: Direction) {
         match direction {
             Up => self.up(),
             Down => self.down(),
@@ -34,11 +34,11 @@ struct Stage {
 }
 
 impl Stage {
-    fn new(cols: i32, rows: i32) -> Stage {
+    fn new (cols: i32, rows: i32) -> Stage {
         Stage { cols: cols, rows: rows }
     }
 
-    fn draw_walls(&self) {
+    fn draw (&self) {
         for x in range(0, self.cols) {
             move(0, x);
             printw(WALL);
@@ -54,7 +54,7 @@ impl Stage {
         }
     }
 
-    fn center(&self) -> (i32,i32) {
+    fn center (&self) -> (i32,i32) {
         (self.cols / 2, self.rows / 2)
     }
 }
@@ -67,7 +67,7 @@ enum Direction {
 }
 
 impl Direction {
-    fn inverse(&self) -> Direction {
+    fn inverse (&self) -> Direction {
         match *self {
             Up => Down,
             Down => Up,
@@ -114,23 +114,23 @@ impl Snake {
         for &m in self.moves.iter().rev() {
             move(tail.y, tail.x);
             printw(self.symbol);
-            tail.go(m.inverse())
+            tail.move(m.inverse())
         }
 
         self.moves.shift();
         self.refreshed = true;
     }
 
-    fn move(&mut self, direction: Direction) {
+    fn move (&mut self, direction: Direction) {
         if self.refreshed {
-            self.position.go(direction);
+            self.position.move(direction);
             self.moves.push(direction);
             self.direction = direction;
             self.refreshed = false;
         }
     }
 
-    fn step(&mut self) {
+    fn step (&mut self) {
         self.move(self.direction);
     }
 }
@@ -143,13 +143,14 @@ struct Game {
 impl Game {
     fn draw (&mut self) {
         clear();
-        self.stage.draw_walls();
+        self.stage.draw();
         self.snake.draw();
         refresh();
     }
 
     fn start (&mut self) {
-        self.snake.init(&self.stage)
+        self.snake.init(&self.stage);
+        self.draw();
     }
 }
 
@@ -172,9 +173,9 @@ fn main () {
 
     spawn(proc() {
         loop {
+            std::io::timer::sleep(500);
             mutex.lock().snake.step();
             mutex.lock().draw();
-            std::io::timer::sleep(500);
         }
     });
 

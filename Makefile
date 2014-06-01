@@ -8,5 +8,10 @@ all: .ncurses .snake
 .snake:
 	rustc snake.rs -L ncurses-rs/lib --out-dir bin
 
+test:
+	rustc snake.rs -L ncurses-rs/lib --out-dir bin --test
+	./bin/snake
+
+
 update:
 	git submodule foreach git pull origin master

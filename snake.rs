@@ -7,7 +7,7 @@ use ncurses::*;
 use sync::{Arc,Mutex};
 use std::io::signal::{Listener, Interrupt};
 
-fn move_xy (c: Coordinate) {
+fn move_to (c: Coordinate) {
     let c = c.zero_based();
     move(c.y as i32, c.x as i32);
 }
@@ -48,9 +48,21 @@ impl Coordinate {
 }
 
 enum GridError {
-    NotFound,
-    OutOfBounds,
-    Overlapping
+    Collision(Coordinate)
+}
+
+impl GridError {
+    fn to_str(&self) -> String {
+        match *self {
+            Collision(coord) => {
+                let mut msg = String::new();
+                msg.push_str(coord.x.to_str().as_slice());
+                msg.push_str(" ,");
+                msg.push_str(coord.y.to_str().as_slice());
+                msg
+            }
+        }
+    }
 }
 
 struct Grid {
@@ -68,22 +80,21 @@ impl Grid {
         }
     }
 
-    fn draw(&mut self, coord: Coordinate, sym: &'static str) {
-        self.set(coord);
-        move_xy(coord);
+    fn draw(&mut self, coord: Coordinate, sym: &'static str) -> Result<(), GridError> {
+        move_to(coord);
         printw(sym);
+        self.set(coord)
     }
 
-    fn set (&mut self, coord: Coordinate) {
-        self.matrix.push(coord);
+    fn set (&mut self, coord: Coordinate) -> Result<(), GridError> {
+        if self.matrix.contains(&coord) {
+            return Err(Collision(coord))
+        }
+        Ok(self.matrix.push(coord))
     }
 
     fn unset (&mut self, coord: Coordinate) {
         self.matrix.retain(|c| !c.eq(&coord) );
-    }
-
-    fn is_empty (&mut self) -> bool {
-        self.matrix.len() == 0
     }
 
     fn center (&mut self) -> Coordinate {
@@ -94,18 +105,6 @@ impl Grid {
         self.matrix.clear();
     }
 
-    fn has_collitions(&mut self) -> bool {
-        let mut temp: Vec<&Coordinate> = vec!();
-
-        for coord in self.matrix.iter() {
-            if temp.contains(&coord) {
-                return true
-            }
-            temp.push(coord);
-        }
-
-        false
-    }
 }
 
 struct Stage {
@@ -122,7 +121,8 @@ impl Stage {
         }
     }
 
-    fn render (&mut self, grid: &mut Grid) {
+    #[allow(unused_must_use)]
+    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
         for x in range(1, grid.cols+1) {
             grid.draw(Coordinate{ x:x, y:1 }, self.symbol);
             grid.draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
@@ -133,7 +133,7 @@ impl Stage {
             grid.draw(Coordinate{ x:grid.cols, y:y }, self.symbol);
         }
 
-        self.snake.render(grid);
+        self.snake.render(grid)
     }
 
     fn start (&mut self, center: Coordinate) {
@@ -173,17 +173,20 @@ impl Snake {
         }
     }
 
-    fn render (&mut self, grid: &mut Grid) {
+    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
         let mut tail = self.position.clone();
 
         for &m in self.moves.iter().rev() {
-            grid.draw(tail, self.symbol);
-            tail.move(m.inverse())
+            match grid.draw(tail, self.symbol) {
+                Err(e) => return Err(e),
+                Ok(_)  => tail.move(m.inverse())
+            }
         }
 
         tail.move(self.moves.shift().unwrap().inverse());
         grid.unset(Coordinate{ x:tail.x+1, y:tail.y+1 });
         self.refreshed = true;
+        Ok(())
     }
 
     fn step (&mut self) {
@@ -217,6 +220,18 @@ impl Movement for Snake {
     }
 }
 
+impl Movement for Game {
+    fn move(&mut self, direction: Direction) {
+        self.stage.move(direction)
+    }
+}
+
+impl Movement for Stage {
+    fn move(&mut self, direction: Direction) {
+        self.snake.move(direction)
+    }
+}
+
 struct Game {
     stage: Stage,
     grid: Grid
@@ -230,16 +245,28 @@ impl Game {
         }
     }
 
-    fn render (&mut self) {
+    fn render (&mut self) -> Result<(), GridError> {
         clear();
         self.grid.clear();
-        self.stage.render(&mut self.grid);
-        if self.grid.has_collitions() {
-            printw("BOOM!");
-        }
+        let result = match self.stage.render(&mut self.grid) {
+            Err(e) => {
+                let mut msg = String::from_str("Collision on ");
+                msg.push_str(e.to_str().as_slice());
+                printw(msg.as_slice());
+
+                move_to(self.grid.center());
+                printw("Game Over");
+                Err(e)
+            }
+            Ok(n) => { Ok(n) }
+        };
+
         refresh();
+
+        result
     }
 
+    #[allow(unused_must_use)]
     fn start (&mut self) {
         self.stage.start(self.grid.center());
         self.render();
@@ -247,11 +274,6 @@ impl Game {
 
     fn step (&mut self) {
         self.stage.step();
-        // potentially detect collisions here
-    }
-
-    fn move (&mut self, direction: Direction) {
-        self.stage.snake.move(direction);
     }
 }
 
@@ -262,7 +284,7 @@ fn main () {
     curs_set(CURSOR_INVISIBLE);
     keypad(stdscr, true);
 
-    let mut game = Game::new(20,20);
+    let mut game = Game::new(20,15);
     game.start();
 
     let mutex = Arc::new(Mutex::new(game));
@@ -272,7 +294,10 @@ fn main () {
         loop {
             std::io::timer::sleep(300);
             mutex.lock().step();
-            mutex.lock().render();
+            match mutex.lock().render() {
+                Err(_) => { break; },
+                Ok(_) => {}
+            }
         }
     });
 
@@ -297,19 +322,6 @@ fn main () {
             _ => (),
         }
     }
-}
-
-#[test]
-fn test_grid_empty () {
-    let mut grid = Grid::new(2, 2);
-    assert_eq!(grid.is_empty(), true);
-}
-
-#[test]
-fn test_grid_set () {
-    let mut grid = Grid::new(2, 2);
-    grid.set(Coordinate{ x:1, y:2 });
-    assert_eq!(grid.is_empty(), false);
 }
 
 #[test]

@@ -81,9 +81,14 @@ impl Grid {
     }
 
     fn draw(&mut self, coord: Coordinate, sym: &'static str) -> Result<(), GridError> {
-        move_to(coord);
-        printw(sym);
-        self.set(coord)
+        match self.set(coord) {
+            Ok(()) => {
+                move_to(coord);
+                printw(sym);
+                Ok(())
+            },
+            Err(e) => { Err(e) }
+        }
     }
 
     fn set (&mut self, coord: Coordinate) -> Result<(), GridError> {
@@ -105,6 +110,24 @@ impl Grid {
         self.matrix.clear();
     }
 
+    fn random_free_spot(&mut self) -> Coordinate {
+        use std::rand::{task_rng, sample};
+
+        let mut free_spots = vec!();
+        for x in range(1, self.cols+1) {
+            for y in range(x, self.rows+1) {
+                let coord = Coordinate{ x:x, y:y };
+                if !self.matrix.contains(&coord) {
+                    free_spots.push(coord)
+                }
+            }
+        }
+
+        let mut rng = task_rng();
+        let index = sample(&mut rng, range(0, free_spots.len()), 1);
+        free_spots.remove(*index.get(0)).unwrap()
+    }
+
 }
 
 struct Stage {
@@ -116,8 +139,7 @@ impl Stage {
     fn new () -> Stage {
         Stage {
             symbol: "X",
-            snake: Snake::new(),
-            //edibles: vec!()
+            snake: Snake::new()
         }
     }
 
@@ -145,13 +167,30 @@ impl Stage {
     }
 }
 
+struct Apple {
+    position: Coordinate,
+    has_a_place: bool,
+    symbol: &'static str,
+}
+
+impl Apple {
+    fn new () -> Apple {
+        Apple {
+            position: Coordinate{ x:1, y:1 },
+            has_a_place: false,
+            symbol: "A"
+        }
+    }
+}
+
 
 struct Snake {
     position: Coordinate,
     direction: Direction,
     symbol: &'static str,
     moves: Vec<Direction>,
-    refreshed: bool
+    refreshed: bool,
+    apple: Apple
 }
 
 impl Snake {
@@ -162,6 +201,7 @@ impl Snake {
             symbol: "o",
             refreshed: false,
             moves: vec!(),
+            apple: Apple::new()
         }
     }
 
@@ -173,25 +213,6 @@ impl Snake {
         }
     }
 
-    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
-        let mut tail = self.position.clone();
-
-        for &m in self.moves.iter().rev() {
-            match grid.draw(tail, self.symbol) {
-                Err(e) => return Err(e),
-                Ok(_)  => tail.move(m.inverse())
-            }
-        }
-
-        tail.move(self.moves.shift().unwrap().inverse());
-        grid.unset(Coordinate{ x:tail.x+1, y:tail.y+1 });
-        self.refreshed = true;
-        Ok(())
-    }
-
-    fn step (&mut self) {
-        self.move(self.direction);
-    }
 }
 
 trait Movement {
@@ -232,6 +253,60 @@ impl Movement for Stage {
     }
 }
 
+trait Render {
+    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError>;
+    fn step (&mut self);
+}
+
+impl Render for Snake {
+    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
+        let mut tail = self.position.clone();
+
+        for &m in self.moves.iter().rev() {
+            match grid.draw(tail, self.symbol) {
+                Err(e) => return Err(e),
+                Ok(_)  => tail.move(m.inverse())
+            }
+        }
+
+        self.refreshed = true;
+
+        match self.apple.render(grid) {
+            Err(_) => { Ok(()) }
+            Ok(_) => {
+                tail.move(self.moves.shift().unwrap().inverse());
+                grid.unset(Coordinate{ x:tail.x+1, y:tail.y+1 });
+                Ok(())
+            }
+        }
+    }
+
+    fn step (&mut self) {
+        self.move(self.direction);
+    }
+}
+
+impl Render for Apple {
+    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
+        if !self.has_a_place {
+            self.position = grid.random_free_spot();
+            self.has_a_place = true
+        }
+
+        match grid.draw(self.position, self.symbol) {
+            Err(e) => {
+                self.has_a_place = false;
+                Err(e)
+            },
+            _ => Ok(())
+        }
+    }
+
+    fn step (&mut self) {
+        //
+    }
+}
+
 struct Game {
     stage: Stage,
     grid: Grid
@@ -243,6 +318,12 @@ impl Game {
             stage: Stage::new(),
             grid: Grid::new(cols, rows)
         }
+    }
+
+    #[allow(unused_must_use)]
+    fn start (&mut self) {
+        self.stage.start(self.grid.center());
+        self.render();
     }
 
     fn render (&mut self) -> Result<(), GridError> {
@@ -264,12 +345,6 @@ impl Game {
         refresh();
 
         result
-    }
-
-    #[allow(unused_must_use)]
-    fn start (&mut self) {
-        self.stage.start(self.grid.center());
-        self.render();
     }
 
     fn step (&mut self) {

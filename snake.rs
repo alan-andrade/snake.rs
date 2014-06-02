@@ -2,6 +2,7 @@
 
 extern crate ncurses;
 extern crate sync;
+extern crate debug;
 use ncurses::*;
 use sync::{Arc,Mutex};
 use std::io::signal::{Listener, Interrupt};
@@ -30,7 +31,7 @@ impl Direction {
     }
 }
 
-#[deriving(Clone)]
+#[deriving(Clone,PartialEq)]
 struct Coordinate {
     x: uint,
     y: uint
@@ -73,37 +74,37 @@ impl Grid {
         printw(sym);
     }
 
-    fn index_for(&mut self, coord: &Coordinate) -> Result<uint, GridError> {
-        let (x,y) = (coord.x,coord.y);
-
-        if x > self.cols || y > self.rows {
-            return Err(OutOfBounds)
-        }
-
-        Ok((x-1) + (self.rows * (y-1)))
-    }
-
-    fn set (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
+    fn set (&mut self, coord: Coordinate) {
         self.matrix.push(coord);
-        Ok(coord)
     }
 
-    fn unset (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
-        Ok(coord)
+    fn unset (&mut self, coord: Coordinate) {
+        self.matrix.retain(|c| !c.eq(&coord) );
     }
 
     fn is_empty (&mut self) -> bool {
         self.matrix.len() == 0
     }
 
-    fn print (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
-        try!(self.set(coord));
-        move_xy(coord);
-        Ok(coord)
-    }
-
     fn center (&mut self) -> Coordinate {
         Coordinate { x:self.cols / 2, y:self.rows / 2 }
+    }
+
+    fn clear (&mut self) {
+        self.matrix.clear();
+    }
+
+    fn has_collitions(&mut self) -> bool {
+        let mut temp: Vec<&Coordinate> = vec!();
+
+        for coord in self.matrix.iter() {
+            if temp.contains(&coord) {
+                return true
+            }
+            temp.push(coord);
+        }
+
+        false
     }
 }
 
@@ -127,7 +128,7 @@ impl Stage {
             grid.draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
         }
 
-        for y in range(1, grid.rows+1) {
+        for y in range(2, grid.rows) {
             grid.draw(Coordinate{ x:1, y:y }, self.symbol);
             grid.draw(Coordinate{ x:grid.cols, y:y }, self.symbol);
         }
@@ -176,7 +177,7 @@ impl Snake {
         let mut tail = self.position.clone();
 
         for &m in self.moves.iter().rev() {
-            grid.draw(Coordinate{ x:tail.x, y:tail.y }, self.symbol);
+            grid.draw(tail, self.symbol);
             tail.move(m.inverse())
         }
 
@@ -231,7 +232,11 @@ impl Game {
 
     fn render (&mut self) {
         clear();
+        self.grid.clear();
         self.stage.render(&mut self.grid);
+        if self.grid.has_collitions() {
+            printw("BOOM!");
+        }
         refresh();
     }
 
@@ -294,7 +299,6 @@ fn main () {
     }
 }
 
-#[cfg(test)]
 #[test]
 fn test_grid_empty () {
     let mut grid = Grid::new(2, 2);
@@ -309,42 +313,12 @@ fn test_grid_set () {
 }
 
 #[test]
-fn test_grid_out_of_bounds () {
-    let mut grid = Grid::new(3, 3);
-    match grid.set(Coordinate{x:3, y:4}) {
-        Err(e) => match e {
-            OutOfBounds => assert!(true),
-            _ => {}
-        },
-        Ok(_) => {}
-    }
-}
-
-#[test]
-fn test_grid_index_of () {
-    let mut grid = Grid::new(3,3);
-    match grid.index_for(&Coordinate{x: 3, y:3}) {
-        Ok(c) => { assert_eq!(c, 8) }
-        Err(_) => {}
-    }
-
-    match grid.index_for(&Coordinate{x:1,y:1}) {
-        Ok(c) => { assert_eq!(c, 0) }
-        Err(_) => {}
-    }
-
-    match grid.index_for(&Coordinate{x:3,y:2}) {
-        Ok(c) => { assert_eq!(c, 5) }
-        Err(_) => {}
-    }
-
-    match grid.index_for(&Coordinate{x:2,y:2}) {
-        Ok(c) => { assert_eq!(c, 4) }
-        Err(_) => {}
-    }
-
-    match grid.index_for(&Coordinate{x:1,y:3}) {
-        Ok(c) => { assert_eq!(c, 6) }
-        Err(_) => {}
-    }
+fn test_grid_collition () {
+    let mut grid = Grid::new(2, 2);
+    grid.set(Coordinate{ x:1, y:1 });
+    assert!(grid.has_collitions() == false);
+    grid.set(Coordinate{ x:2, y:1 });
+    assert!(grid.has_collitions() == false);
+    grid.set(Coordinate{ x:2, y:1 });
+    assert!(grid.has_collitions() == true);
 }

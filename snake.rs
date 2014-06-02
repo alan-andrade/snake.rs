@@ -348,14 +348,14 @@ fn main () {
     curs_set(CURSOR_INVISIBLE);
     keypad(stdscr, true);
 
-    let mut game = Game::new(20,15);
+    let mut game = Game::new(30,20);
     game.start();
 
     let mutex = Arc::new(Mutex::new(game));
     let mutex_2 = mutex.clone();
 
     spawn(proc() {
-        let mut timer = 500;
+        let mut timer = 300;
 
         loop {
             std::io::timer::sleep(timer);

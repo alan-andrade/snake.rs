@@ -2,18 +2,16 @@
 
 This is the tipical snake game implemented in Rust.
 
-# Install
+![snake](snake.png)
 
-First get the latest version of rust from rust-lang.org
+# Play !
+
+First [fork](https://github.com/alan-andrade/snake.rs/fork) this repo.
 
 ```bash
-git clone git@github.com:alan-andrade/snake.rs.git
+git clone {your fork}
 cd snake.rs
-git submodule init
-git submodule update
+git clone --recursive https://github.com/alan-andrade/snake.rs.git
 make
 ./bin/snake
 ```
-
-If compilation fails, update ncurses-rs with this:
-`git submodule foreach git pull origin master`

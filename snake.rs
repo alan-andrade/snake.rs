@@ -47,22 +47,10 @@ impl Coordinate {
     }
 }
 
-enum GridError {
-    Collision(Coordinate)
-}
-
-impl GridError {
-    fn to_str(&self) -> String {
-        match *self {
-            Collision(coord) => {
-                let mut msg = String::new();
-                msg.push_str(coord.x.to_str().as_slice());
-                msg.push_str(" ,");
-                msg.push_str(coord.y.to_str().as_slice());
-                msg
-            }
-        }
-    }
+enum GridResult {
+    Grow,
+    Collision(Coordinate),
+    Step
 }
 
 struct Grid {
@@ -80,22 +68,23 @@ impl Grid {
         }
     }
 
-    fn draw(&mut self, coord: Coordinate, sym: &'static str) -> Result<(), GridError> {
+    fn draw(&mut self, coord: Coordinate, sym: &'static str) -> GridResult {
         match self.set(coord) {
-            Ok(()) => {
+            Step | Grow => {
                 move_to(coord);
                 printw(sym);
-                Ok(())
+                Step
             },
-            Err(e) => { Err(e) }
+            Collision(c) => { Collision(c) }
         }
     }
 
-    fn set (&mut self, coord: Coordinate) -> Result<(), GridError> {
+    fn set (&mut self, coord: Coordinate) -> GridResult {
         if self.matrix.contains(&coord) {
-            return Err(Collision(coord))
+            return Collision(coord)
         }
-        Ok(self.matrix.push(coord))
+        self.matrix.push(coord);
+        Step
     }
 
     fn unset (&mut self, coord: Coordinate) {
@@ -138,13 +127,13 @@ struct Stage {
 impl Stage {
     fn new () -> Stage {
         Stage {
-            symbol: "X",
+            symbol: "+",
             snake: Snake::new()
         }
     }
 
     #[allow(unused_must_use)]
-    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
+    fn render (&mut self, grid: &mut Grid) -> GridResult {
         for x in range(1, grid.cols+1) {
             grid.draw(Coordinate{ x:x, y:1 }, self.symbol);
             grid.draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
@@ -198,7 +187,7 @@ impl Snake {
         Snake {
             position: Coordinate{ x:1, y:1 },
             direction: Right,
-            symbol: "o",
+            symbol: "O",
             refreshed: false,
             moves: vec!(),
             apple: Apple::new()
@@ -254,30 +243,30 @@ impl Movement for Stage {
 }
 
 trait Render {
-    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError>;
+    fn render (&mut self, grid: &mut Grid) -> GridResult;
     fn step (&mut self);
 }
 
 impl Render for Snake {
-    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
+    fn render (&mut self, grid: &mut Grid) -> GridResult {
         let mut tail = self.position.clone();
 
         for &m in self.moves.iter().rev() {
             match grid.draw(tail, self.symbol) {
-                Err(e) => return Err(e),
-                Ok(_)  => tail.move(m.inverse())
+                Collision(c) => return Collision(c),
+                Step|Grow => tail.move(m.inverse())
             }
         }
 
         self.refreshed = true;
 
         match self.apple.render(grid) {
-            Err(_) => { Ok(()) }
-            Ok(_) => {
+            Step => {
                 tail.move(self.moves.shift().unwrap().inverse());
                 grid.unset(Coordinate{ x:tail.x+1, y:tail.y+1 });
-                Ok(())
-            }
+                Step
+            },
+            _var => { _var }
         }
     }
 
@@ -287,24 +276,22 @@ impl Render for Snake {
 }
 
 impl Render for Apple {
-    fn render (&mut self, grid: &mut Grid) -> Result<(), GridError> {
+    fn render (&mut self, grid: &mut Grid) -> GridResult {
         if !self.has_a_place {
             self.position = grid.random_free_spot();
             self.has_a_place = true
         }
 
         match grid.draw(self.position, self.symbol) {
-            Err(e) => {
+            Collision(_) => {
                 self.has_a_place = false;
-                Err(e)
+                Grow
             },
-            _ => Ok(())
+            _t => { _t }
         }
     }
 
-    fn step (&mut self) {
-        //
-    }
+    fn step (&mut self) { }
 }
 
 struct Game {
@@ -326,24 +313,26 @@ impl Game {
         self.render();
     }
 
-    fn render (&mut self) -> Result<(), GridError> {
+    fn render (&mut self) -> GridResult {
         clear();
         self.grid.clear();
+
         let result = match self.stage.render(&mut self.grid) {
-            Err(e) => {
+            Collision(c) => {
                 let mut msg = String::from_str("Collision on ");
-                msg.push_str(e.to_str().as_slice());
+                msg.push_str(c.x.to_str().as_slice());
+                msg.push_str(" ,");
+                msg.push_str(c.y.to_str().as_slice());
                 printw(msg.as_slice());
 
                 move_to(self.grid.center());
                 printw("Game Over");
-                Err(e)
+                Collision(c)
             }
-            Ok(n) => { Ok(n) }
+            _type => { _type }
         };
 
         refresh();
-
         result
     }
 
@@ -366,12 +355,15 @@ fn main () {
     let mutex_2 = mutex.clone();
 
     spawn(proc() {
+        let mut timer = 500;
+
         loop {
-            std::io::timer::sleep(300);
+            std::io::timer::sleep(timer);
             mutex.lock().step();
             match mutex.lock().render() {
-                Err(_) => { break; },
-                Ok(_) => {}
+                Collision(_) => { break; },
+                Grow => { timer -= 25; },
+                _ => {}
             }
         }
     });

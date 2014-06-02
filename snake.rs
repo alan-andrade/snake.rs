@@ -6,16 +6,12 @@ use ncurses::*;
 use sync::{Arc,Mutex};
 use std::io::signal::{Listener, Interrupt};
 
-type State = uint;
-
-static WALL: &'static str = "#";
-static ON:  uint = 1;
-static OFF: uint = 0;
-
-fn move_xy (x: i32, y: i32) {
-    move(y-1,x-1);
+fn move_xy (c: Coordinate) {
+    let c = c.zero_based();
+    move(c.y as i32, c.x as i32);
 }
 
+#[deriving(PartialEq)]
 enum Direction {
     Up,
     Down,
@@ -34,50 +30,52 @@ impl Direction {
     }
 }
 
-struct Position {
-    x: i32,
-    y: i32
-}
-
-impl Position {
-    fn up (&mut self)    { self.y-=1; }
-    fn down (&mut self)  { self.y+=1; }
-    fn left (&mut self)  { self.x-=1; }
-    fn right (&mut self) { self.x+=1; }
-}
-
+#[deriving(Clone)]
 struct Coordinate {
     x: uint,
     y: uint
 }
 
-struct Grid {
-    set: Vec<uint>,
-    cols: uint,
-    rows: uint
+impl Coordinate {
+    fn up (&mut self)    { self.y-=1; }
+    fn down (&mut self)  { self.y+=1; }
+    fn left (&mut self)  { self.x-=1; }
+    fn right (&mut self) { self.x+=1; }
+    fn zero_based(&self) -> Coordinate {
+        Coordinate{ x:self.x-1, y:self.y-1 }
+    }
 }
 
 enum GridError {
     NotFound,
-    OutOfBounds
+    OutOfBounds,
+    Overlapping
+}
+
+struct Grid {
+    matrix: Vec<Coordinate>,
+    cols: uint,
+    rows: uint
 }
 
 impl Grid {
     fn new(cols: uint, rows: uint) -> Grid {
-        let mut set = vec!();
-
-        for _ in range(0,rows*cols) {
-            set.push(0);
-        }
-
         Grid {
-            set: set,
+            matrix: vec!(),
             cols: cols,
             rows: rows
         }
     }
 
-    fn index_for(&mut self, x: uint, y: uint) -> Result<uint, GridError> {
+    fn draw(&mut self, coord: Coordinate, sym: &'static str) {
+        self.set(coord);
+        move_xy(coord);
+        printw(sym);
+    }
+
+    fn index_for(&mut self, coord: &Coordinate) -> Result<uint, GridError> {
+        let (x,y) = (coord.x,coord.y);
+
         if x > self.cols || y > self.rows {
             return Err(OutOfBounds)
         }
@@ -85,91 +83,70 @@ impl Grid {
         Ok((x-1) + (self.rows * (y-1)))
     }
 
-    fn turn(&mut self, state: State, x: uint, y: uint) -> Result<Coordinate, GridError> {
-        let target_index = try!(self.index_for(x, y));
+    fn set (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
+        self.matrix.push(coord);
+        Ok(coord)
+    }
 
-        match state {
-            ON  => *self.set.get_mut(target_index) = ON,
-            OFF => *self.set.get_mut(target_index) = OFF,
-            _ => {}
-        }
-
-        Ok(Coordinate{x: x, y: y})
+    fn unset (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
+        Ok(coord)
     }
 
     fn is_empty (&mut self) -> bool {
-        self.set.iter().all(|&x| x == OFF)
-    }
-}
-
-struct GridSet<'a> {
-    grids: Vec<&'a Grid>
-}
-
-impl<'a>  GridSet<'a> {
-    fn new<'a> (grids: Vec<&'a Grid>) -> GridSet<'a> {
-        GridSet {
-            grids: grids
-        }
+        self.matrix.len() == 0
     }
 
-    fn resolve (&'a self) {
-        //let x = self.grids.get(0).width.clone();
-        //let y = self.grids.get(0).height.clone();
-        //let max = self.grids.len();
+    fn print (&mut self, coord: Coordinate) -> Result<Coordinate, GridError> {
+        try!(self.set(coord));
+        move_xy(coord);
+        Ok(coord)
+    }
 
-        //for counter in range(0, x * y) {
-            //let (x_count, y_count) = (0,0);
-
-            //for &&grid in self.grids.iter() {
-                //spot_counter = spot_counter + *grid.set.get(counter as uint)
-            //}
-        //}
+    fn center (&mut self) -> Coordinate {
+        Coordinate { x:self.cols / 2, y:self.rows / 2 }
     }
 }
 
 struct Stage {
-    cols: i32,
-    rows: i32
+    symbol: &'static str,
+    snake: Snake,
 }
 
 impl Stage {
-    fn new (cols: i32, rows: i32) -> Stage {
+    fn new () -> Stage {
         Stage {
-            cols: cols-1,
-            rows: rows-1
+            symbol: "X",
+            snake: Snake::new(),
+            //edibles: vec!()
         }
     }
 
-    fn render (&self, grid: &mut Box<Grid>) {
-        for x in range(1, self.cols) {
-            move_xy(x, 1);
-            grid.turn(ON, x as uint, 1);
-            printw(WALL);
-
-            move_xy(x, self.rows);
-            grid.turn(ON, x as uint, self.rows as uint);
-            printw(WALL);
+    fn render (&mut self, grid: &mut Grid) {
+        for x in range(1, grid.cols+1) {
+            grid.draw(Coordinate{ x:x, y:1 }, self.symbol);
+            grid.draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
         }
 
-        for y in range(2, self.rows) {
-            move_xy(1, y);
-            printw(WALL);
-            grid.turn(ON, 1, y as uint);
-            move_xy(self.cols, y);
-            printw(WALL);
-            grid.turn(ON, self.cols as uint, y as uint);
+        for y in range(1, grid.rows+1) {
+            grid.draw(Coordinate{ x:1, y:y }, self.symbol);
+            grid.draw(Coordinate{ x:grid.cols, y:y }, self.symbol);
         }
+
+        self.snake.render(grid);
     }
 
-    fn center (&self) -> (i32,i32) {
-        (self.cols / 2, self.rows / 2)
+    fn start (&mut self, center: Coordinate) {
+        self.snake.start(center);
+    }
+
+    fn step(&mut self) {
+        self.snake.step();
     }
 }
 
 
 struct Snake {
-    position: Position,
+    position: Coordinate,
     direction: Direction,
     symbol: &'static str,
     moves: Vec<Direction>,
@@ -179,7 +156,7 @@ struct Snake {
 impl Snake {
     fn new () -> Snake {
         Snake {
-            position: Position {x:0, y:0},
+            position: Coordinate{ x:1, y:1 },
             direction: Right,
             symbol: "o",
             refreshed: false,
@@ -187,28 +164,24 @@ impl Snake {
         }
     }
 
-    fn init (&mut self, stage: &Stage) {
-        let (x,y) = stage.center();
-        self.position.x = x;
-        self.position.y = y;
+    fn start (&mut self, center: Coordinate) {
+        self.position = center;
+
         for _ in range(0, 3) {
             self.moves.push(self.direction);
         }
     }
 
-    fn render (&mut self, grid: &mut Box<Grid>) {
-        let mut tail = Position {
-            x: self.position.x,
-            y: self.position.y
-        };
+    fn render (&mut self, grid: &mut Grid) {
+        let mut tail = self.position.clone();
 
         for &m in self.moves.iter().rev() {
-            move(tail.y, tail.x);
-            printw(self.symbol);
+            grid.draw(Coordinate{ x:tail.x, y:tail.y }, self.symbol);
             tail.move(m.inverse())
         }
 
-        self.moves.shift();
+        tail.move(self.moves.shift().unwrap().inverse());
+        grid.unset(Coordinate{ x:tail.x+1, y:tail.y+1 });
         self.refreshed = true;
     }
 
@@ -221,8 +194,7 @@ trait Movement {
     fn move(&mut self, Direction) {}
 }
 
-
-impl Movement for Position {
+impl Movement for Coordinate {
     fn move (&mut self, direction: Direction) {
         match direction {
             Up      => self.up(),
@@ -235,7 +207,7 @@ impl Movement for Position {
 
 impl Movement for Snake {
     fn move(&mut self, direction: Direction) {
-        if self.refreshed {
+        if self.refreshed && !direction.inverse().eq(self.moves.last().unwrap()) {
             self.position.move(direction);
             self.moves.push(direction);
             self.direction = direction;
@@ -245,30 +217,36 @@ impl Movement for Snake {
 }
 
 struct Game {
-    snake: Snake,
     stage: Stage,
-    grid: Box<Grid>
+    grid: Grid
 }
 
 impl Game {
-    fn new (cols: i32, rows: i32) -> Game {
+    fn new (cols: uint, rows: uint) -> Game {
         Game {
-            stage: Stage::new(cols, rows),
-            snake: Snake::new(),
-            grid: box Grid::new(cols as uint, rows as uint)
+            stage: Stage::new(),
+            grid: Grid::new(cols, rows)
         }
     }
 
     fn render (&mut self) {
         clear();
         self.stage.render(&mut self.grid);
-        self.snake.render(&mut self.grid);
         refresh();
     }
 
     fn start (&mut self) {
-        self.snake.init(&self.stage);
+        self.stage.start(self.grid.center());
         self.render();
+    }
+
+    fn step (&mut self) {
+        self.stage.step();
+        // potentially detect collisions here
+    }
+
+    fn move (&mut self, direction: Direction) {
+        self.stage.snake.move(direction);
     }
 }
 
@@ -279,8 +257,7 @@ fn main () {
     curs_set(CURSOR_INVISIBLE);
     keypad(stdscr, true);
 
-    let mut game = Game::new(30,30);
-
+    let mut game = Game::new(20,20);
     game.start();
 
     let mutex = Arc::new(Mutex::new(game));
@@ -288,8 +265,8 @@ fn main () {
 
     spawn(proc() {
         loop {
-            std::io::timer::sleep(500);
-            mutex.lock().snake.step();
+            std::io::timer::sleep(300);
+            mutex.lock().step();
             mutex.lock().render();
         }
     });
@@ -297,10 +274,10 @@ fn main () {
     spawn(proc() {
         loop {
             match getch() {
-                KEY_UP      => { mutex_2.lock().snake.move(Up);    },
-                KEY_DOWN    => { mutex_2.lock().snake.move(Down);  },
-                KEY_LEFT    => { mutex_2.lock().snake.move(Left);  },
-                KEY_RIGHT   => { mutex_2.lock().snake.move(Right); },
+                KEY_UP      => { mutex_2.lock().move(Up);    },
+                KEY_DOWN    => { mutex_2.lock().move(Down);  },
+                KEY_LEFT    => { mutex_2.lock().move(Left);  },
+                KEY_RIGHT   => { mutex_2.lock().move(Right); },
                 _ => { }
             }
         }
@@ -325,16 +302,16 @@ fn test_grid_empty () {
 }
 
 #[test]
-fn test_grid_turn () {
+fn test_grid_set () {
     let mut grid = Grid::new(2, 2);
-    grid.turn(ON, 1, 2);
+    grid.set(Coordinate{ x:1, y:2 });
     assert_eq!(grid.is_empty(), false);
 }
 
 #[test]
 fn test_grid_out_of_bounds () {
     let mut grid = Grid::new(3, 3);
-    match grid.turn(OFF, 3, 4) {
+    match grid.set(Coordinate{x:3, y:4}) {
         Err(e) => match e {
             OutOfBounds => assert!(true),
             _ => {}
@@ -346,27 +323,27 @@ fn test_grid_out_of_bounds () {
 #[test]
 fn test_grid_index_of () {
     let mut grid = Grid::new(3,3);
-    match grid.index_for(3,3) {
+    match grid.index_for(&Coordinate{x: 3, y:3}) {
         Ok(c) => { assert_eq!(c, 8) }
         Err(_) => {}
     }
 
-    match grid.index_for(1,1) {
+    match grid.index_for(&Coordinate{x:1,y:1}) {
         Ok(c) => { assert_eq!(c, 0) }
         Err(_) => {}
     }
 
-    match grid.index_for(3,2) {
+    match grid.index_for(&Coordinate{x:3,y:2}) {
         Ok(c) => { assert_eq!(c, 5) }
         Err(_) => {}
     }
 
-    match grid.index_for(2,2) {
+    match grid.index_for(&Coordinate{x:2,y:2}) {
         Ok(c) => { assert_eq!(c, 4) }
         Err(_) => {}
     }
 
-    match grid.index_for(1,3) {
+    match grid.index_for(&Coordinate{x:1,y:3}) {
         Ok(c) => { assert_eq!(c, 6) }
         Err(_) => {}
     }

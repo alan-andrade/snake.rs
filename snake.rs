@@ -6,11 +6,7 @@ extern crate debug;
 use ncurses::*;
 use sync::{Arc,Mutex};
 use std::io::signal::{Listener, Interrupt};
-
-fn move_to (c: Coordinate) {
-    let c = c.zero_based();
-    move(c.y as i32, c.x as i32);
-}
+use std::comm::channel;
 
 #[deriving(PartialEq)]
 enum Direction {
@@ -38,10 +34,6 @@ struct Coordinate {
 }
 
 impl Coordinate {
-    fn up (&mut self)    { self.y-=1; }
-    fn down (&mut self)  { self.y+=1; }
-    fn left (&mut self)  { self.x-=1; }
-    fn right (&mut self) { self.x+=1; }
     fn zero_based(&self) -> Coordinate {
         Coordinate{ x:self.x-1, y:self.y-1 }
     }
@@ -49,8 +41,29 @@ impl Coordinate {
 
 enum GridResult {
     Grow,
-    Collision(Coordinate),
-    Step
+    Step,
+    Collision(Coordinate)
+}
+
+trait Drawable {
+    pub fn draw(&self, &'static str, Coordinate);
+}
+
+struct NDrawer;
+
+impl Drawable for NDrawer {
+    fn draw(string: &'static str, coordinate: Coordinate) {
+        NDrawer::move_to(coordinate);
+        printw(string);
+    }
+
+}
+
+impl NDrawer {
+    fn move_to (c: Coordinate) {
+        let c = c.zero_based();
+        move(c.y as i32, c.x as i32);
+    }
 }
 
 struct Grid {
@@ -71,8 +84,7 @@ impl Grid {
     fn draw(&mut self, coord: Coordinate, sym: &'static str) -> GridResult {
         match self.set(coord) {
             Step | Grow => {
-                move_to(coord);
-                printw(sym);
+                NDrawer::draw(sym, coord);
                 Step
             },
             Collision(c) => { Collision(c) }
@@ -133,15 +145,15 @@ impl Stage {
     }
 
     #[allow(unused_must_use)]
-    fn render (&mut self, grid: &mut Grid) -> GridResult {
+    fn render (&mut self) -> GridResult {
         for x in range(1, grid.cols+1) {
-            grid.draw(Coordinate{ x:x, y:1 }, self.symbol);
-            grid.draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
+            Drawer::draw(Coordinate{ x:x, y:1 }, self.symbol);
+            Drawer::draw(Coordinate{ x:x, y:grid.rows }, self.symbol);
         }
 
         for y in range(2, grid.rows) {
-            grid.draw(Coordinate{ x:1, y:y }, self.symbol);
-            grid.draw(Coordinate{ x:grid.cols, y:y }, self.symbol);
+            Drawer::draw(Coordinate{ x:1, y:y }, self.symbol);
+            Drawer::draw(Coordinate{ x:grid.cols, y:y }, self.symbol);
         }
 
         self.snake.render(grid)
@@ -211,10 +223,10 @@ trait Movement {
 impl Movement for Coordinate {
     fn move (&mut self, direction: Direction) {
         match direction {
-            Up      => self.up(),
-            Down    => self.down(),
-            Left    => self.left(),
-            Right   => self.right()
+            Up      => self.y-=1,
+            Down    => self.y+=1,
+            Left    => self.x-=1,
+            Right   => self.x+=1
         }
     }
 }
@@ -230,12 +242,14 @@ impl Movement for Snake {
     }
 }
 
+// XXX: A game doesnt move
 impl Movement for Game {
     fn move(&mut self, direction: Direction) {
         self.stage.move(direction)
     }
 }
 
+// XXX: A stage doesnt move
 impl Movement for Stage {
     fn move(&mut self, direction: Direction) {
         self.snake.move(direction)
@@ -252,10 +266,8 @@ impl Render for Snake {
         let mut tail = self.position.clone();
 
         for &m in self.moves.iter().rev() {
-            match grid.draw(tail, self.symbol) {
-                Collision(c) => return Collision(c),
-                Step|Grow => tail.move(m.inverse())
-            }
+            Drawer::draw(tail, self.symbol);
+            tail.move(m.inverse());
         }
 
         self.refreshed = true;
@@ -319,14 +331,14 @@ impl Game {
 
         let result = match self.stage.render(&mut self.grid) {
             Collision(c) => {
-                let mut msg = String::from_str("Collision on ");
-                msg.push_str(c.x.to_str().as_slice());
-                msg.push_str(" ,");
-                msg.push_str(c.y.to_str().as_slice());
-                printw(msg.as_slice());
+                //let mut msg = String::from_str("Collision on ");
+                //msg.push_str(c.x.to_str().as_slice());
+                //msg.push_str(" ,");
+                //msg.push_str(c.y.to_str().as_slice());
+                //printw(msg.as_slice());
 
-                move_to(self.grid.center());
-                printw("Game Over");
+                //move_to(self.grid.center());
+                //printw("Game Over");
                 Collision(c)
             }
             _type => { _type }
@@ -344,28 +356,38 @@ impl Game {
 fn main () {
     initscr();
     cbreak();
+    halfdelay(1);
     noecho();
     curs_set(CURSOR_INVISIBLE);
     keypad(stdscr, true);
 
-    let mut game = Game::new(30,20);
+    let mut game = Game::new(20,20);
     game.start();
+
 
     let mutex = Arc::new(Mutex::new(game));
     let mutex_2 = mutex.clone();
 
+    let (tx, rx) =  channel();
+
     spawn(proc() {
         let mut timer = 300;
+        let mut score = 0;
 
         loop {
             std::io::timer::sleep(timer);
             mutex.lock().step();
             match mutex.lock().render() {
                 Collision(_) => { break; },
-                Grow => { timer -= 25; },
+                Grow => {
+                    timer -= 25;
+                    score += 1;
+                },
                 _ => {}
             }
         }
+
+        tx.send(0);
     });
 
     spawn(proc() {
@@ -375,9 +397,17 @@ fn main () {
                 KEY_DOWN    => { mutex_2.lock().move(Down);  },
                 KEY_LEFT    => { mutex_2.lock().move(Left);  },
                 KEY_RIGHT   => { mutex_2.lock().move(Right); },
+                ERR => {
+                    match rx.try_recv() {
+                        Ok(_) => { break; }
+                        Err(_) => { }
+                    }
+                },
                 _ => { }
             }
         }
+
+        endwin();
     });
 
     let mut listener = Listener::new();
@@ -386,7 +416,7 @@ fn main () {
     loop {
         match listener.rx.recv() {
             Interrupt => { endwin(); },
-            _ => (),
+            _ => { break; }
         }
     }
 }
